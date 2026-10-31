@@ -3,7 +3,6 @@
   "appName": "DeepTutor Voice",
   "webDir": "www",
   "server": {
-    "url": "http://YOUR_PC_IP:8080",
     "cleartext": true
   },
   "android": {

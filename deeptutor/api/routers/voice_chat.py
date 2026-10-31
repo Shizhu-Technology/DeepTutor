@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
+from typing import Optional
 
 from deeptutor.app import DeepTutorApp, TurnRequest
 from deeptutor.services.voice import VoiceProviderError, synthesize_speech, transcribe_audio
@@ -160,6 +162,66 @@ async def voice_chat_reply(
             "session_id": str(session.get("id", "")),
             "turn_id": str(turn.get("id", "")),
             "reply": reply_text,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+
+
+class ChatBase64Request(BaseModel):
+    audio_base64: str
+    persona: Optional[str] = None
+    session_id: Optional[str] = None
+    language: Optional[str] = None
+
+
+@router.post("/chat/base64")
+async def voice_chat_base64(payload: ChatBase64Request) -> JSONResponse:
+    """Mobile-friendly endpoint: base64 audio in, base64 audio + text out."""
+    t0 = time.monotonic()
+    try:
+        audio_bytes = base64.b64decode(payload.audio_base64)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid base64 audio.") from exc
+
+    if not audio_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty audio.")
+    if len(audio_bytes) > _MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Audio too large.")
+
+    transcript = await transcribe_audio(
+        audio_bytes,
+        filename="audio.webm",
+        content_type="audio/webm",
+        language=payload.language,
+    )
+    logger.info("voice_chat_base64: STT done in %.2fs", time.monotonic() - t0)
+
+    session, turn, reply_text = await _chat_reply(
+        transcript,
+        persona=payload.persona,
+        session_id=payload.session_id,
+        language=payload.language,
+    )
+    logger.info("voice_chat_base64: chat done, reply_len=%d", len(reply_text))
+
+    t2 = time.monotonic()
+    try:
+        audio_out, content_type = await synthesize_speech(reply_text)
+        logger.info("voice_chat_base64: TTS done in %.2fs", time.monotonic() - t2)
+    except VoiceProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    logger.info("voice_chat_base64: total %.2fs", time.monotonic() - t0)
+    return JSONResponse(
+        content={
+            "session_id": str(session.get("id", "")),
+            "turn_id": str(turn.get("id", "")),
+            "transcript": transcript.strip(),
+            "reply": reply_text,
+            "audio_base64": base64.b64encode(audio_out).decode("ascii"),
+            "audio_content_type": content_type,
         },
         headers={"Cache-Control": "no-store"},
     )

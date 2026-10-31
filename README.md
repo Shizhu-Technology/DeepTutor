@@ -63,16 +63,16 @@ python3 run.py
 
 ## 打包成 Android APK
 
-也提供了 Capacitor 套壳项目，可以把语音 UI 做成安装包：
+也提供了极简 Android App：只有一个录音按钮，按住说话，松开后自动播放 DeepTutor 语音回复，无需额外 UI 页面。
 
 ```bash
 cd mobile
-# 先把 capacitor.config.json 里的 server.url 改成你电脑的 IP
+# 把 www/index.html 里的后端地址改成你电脑的 IP
 npx cap sync android
 npx cap open android
 ```
 
-然后在 Android Studio 里 Build → Build APK。详见 `mobile/README.md`。
+然后在 Android Studio 里 Build → Build APK。手机上只要电脑后端在跑即可使用，详见 `mobile/README.md`。
 
 ## 原项目
 

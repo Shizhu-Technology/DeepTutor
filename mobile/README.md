@@ -1,37 +1,50 @@
 # DeepTutor Voice Android APK
 
-这是一个用 Capacitor 套壳的 Android App，打开后全屏加载电脑上的语音对话 UI。
+极简语音交互 App：按住录音 → 松开后自动调用后端 → 播放 DeepTutor 语音回复。没有复杂对话页面。
 
-## 原理
+## 运行原理
 
-Android 手机 → 连接到同一 WiFi → 访问 PC 上的 `http://<PC_IP>:8080` → 使用语音对话 UI。
+App 是一个本地单页应用，通过 WiFi 直接调用电脑上的 DeepTutor 后端：
 
-PC 上需要同时运行：
+```
+手机端 → http://<PC_IP>:8001/api/voice/chat/base64
+       → 后端返回文字 + base64 音频
+       → App 自动播放
+```
+
+电脑端只需要启动 DeepTutor 后端，不需要再单独启动 UI 服务器。
+
+## 前置条件
+
+- 手机和电脑在同一 WiFi。
+- 电脑已启动 DeepTutor 后端：
 
 ```bash
-# 1. DeepTutor 后端
+cd ~/DeepTutor
 deeptutor serve --port 8001
-
-# 2. UI 服务器（0.0.0.0 监听，方便手机访问）
-cd voice_chat_ui
-python3 run.py
 ```
+
+> 注意：本接口默认 `auth: learning`。如果手机上没有登录态，请临时把 `deeptutor/modules/manifests/server.json` 中 voice 路由的 `auth` 改为 `public`，或在公网部署时自行处理认证。
 
 ## 修改后端地址
 
-编辑 `mobile/capacitor.config.json`，把 `YOUR_PC_IP` 改成你电脑的内网 IP：
+1. 打开 `mobile/www/index.html`，找到 `input#backendUrl` 的默认值：
 
-```json
-"url": "http://192.168.31.123:8080"
+```html
+<input id="backendUrl" value="http://YOUR_PC_IP:8001" ...>
 ```
 
-获取本机 IP：
+2. 把 `YOUR_PC_IP` 改成你电脑的内网 IP（例如 `192.168.31.123`）。
+
+获取电脑 IP：
 
 ```bash
 ifconfig | grep "inet "
 ```
 
-改完后执行：
+> 也可以不修改源码，首次在 App 里手动输入后端地址。
+
+3. 同步到 Android 项目：
 
 ```bash
 cd mobile
@@ -50,21 +63,16 @@ npx cap open android
 在 Android Studio 中：
 
 1. 等待 Gradle sync 完成。
-2. 点击菜单 **Build → Build Bundle(s) / APK(s) → Build APK(s)**。
-3. 生成的 APK 路径：`mobile/android/app/build/outputs/apk/debug/app-debug.apk`
+2. 点击 **Build → Build Bundle(s) / APK(s) → Build APK(s)**。
+3. APK 输出路径：`mobile/android/app/build/outputs/apk/debug/app-debug.apk`
 
-安装到手机即可使用。
+安装到手机后，首次使用允许麦克风权限，输入后端地址，按住按钮说话即可。
 
-## 权限
+## 可能会用到的权限
 
-App 已申请：
+`AndroidManifest.xml` 已包含：
 
 - `INTERNET`
 - `RECORD_AUDIO`
 - `MODIFY_AUDIO_SETTINGS`
-
-首次录音时需要在 App 内允许麦克风权限。
-
-## 无需网络时的替代方案
-
-如果手机和 PC 不在同一局域网，可以把 `capacitor.config.json` 里的 `url` 改成部署到公网的服务器地址。
+- `usesCleartextTraffic="true"`
