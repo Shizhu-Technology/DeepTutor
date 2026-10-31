@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import time
 from typing import Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB, matching /api/voice/stt
+_MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 
 def _collect_text(events: list[dict[str, Any]]) -> str:
@@ -80,7 +81,6 @@ async def _run_chat_turn(
     session_id: str | None,
     language: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
-    """Run a chat turn and return (session, turn, reply_text)."""
     events: list[dict[str, Any]] = []
 
     turn_request = TurnRequest(
@@ -94,7 +94,6 @@ async def _run_chat_turn(
 
     async for item in app.stream_turn(turn["id"]):
         events.append(item)
-        # Auto-resolve any ask_user pause so headless callers do not hang.
         if item.get("type") == "tool_result":
             ask = (item.get("metadata") or {}).get("ask_user")
             if isinstance(ask, dict) and ask:
@@ -111,18 +110,14 @@ async def voice_chat(
     persona: str | None = Form(default=None),
     session_id: str | None = Form(default=None),
     language: str | None = Form(default=None),
-    output: Literal["json", "audio"] = Query(
-        default="json",
-        description='Return format: "json" (default, with base64 audio) or "audio" (raw audio stream).',
-    ),
+    output: Literal["json", "audio"] = Query(default="json"),
 ) -> JSONResponse | StreamingResponse:
-    """Accept an audio clip, transcribe it, ask DeepTutor, and return TTS audio.
-
-    Set ``output=audio`` to receive the reply as a raw audio stream (easier
-    for mobile/WebRTC clients).  The default ``output=json`` also returns the
-    transcript and reply text for UI display.
-    """
+    """Accept an audio clip, transcribe it, ask DeepTutor, and return TTS audio."""
+    t0 = time.monotonic()
     audio_bytes = await audio.read()
+    t_read = time.monotonic()
+    logger.info("voice_chat: read %d bytes in %.2fs", len(audio_bytes), t_read - t0)
+
     if not audio_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty audio upload.")
     if len(audio_bytes) > _MAX_AUDIO_BYTES:
@@ -139,12 +134,8 @@ async def voice_chat(
             content_type=audio.content_type or "application/octet-stream",
             language=language,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except VoiceProviderTimeout as exc:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
+        logger.info("voice_chat: STT done in %.2fs, transcript=%r", time.monotonic() - t_read, transcript[:80])
     except VoiceProviderError as exc:
-        logger.warning("STT provider error: %s", exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     if not transcript or not transcript.strip():
@@ -156,12 +147,12 @@ async def voice_chat(
     # 2. DeepTutor chat turn
     try:
         from deeptutor.services.workspace.context import current_workspace_id
-
         workspace_id = current_workspace_id()
     except Exception:
         workspace_id = None
 
     app = DeepTutorApp(workspace_id=workspace_id)
+    t_chat_start = time.monotonic()
     try:
         session, turn, reply_text = await _run_chat_turn(
             app,
@@ -170,6 +161,7 @@ async def voice_chat(
             session_id=session_id,
             language=language,
         )
+        logger.info("voice_chat: chat done in %.2fs, reply=%.80s", time.monotonic() - t_chat_start, reply_text)
     except Exception as exc:
         logger.exception("DeepTutor turn failed")
         raise HTTPException(
@@ -184,19 +176,16 @@ async def voice_chat(
         )
 
     # 3. Text-to-speech
+    t_tts_start = time.monotonic()
     try:
         audio_out, content_type = await synthesize_speech(reply_text)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except VoiceProviderTimeout as exc:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
+        logger.info("voice_chat: TTS done in %.2fs, %d bytes", time.monotonic() - t_tts_start, len(audio_out))
     except VoiceProviderError as exc:
-        logger.warning("TTS provider error: %s", exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
+    logger.info("voice_chat: total %.2fs", time.monotonic() - t0)
+
     if output == "audio":
-        # Return the raw audio stream; metadata travels in headers for clients
-        # that just want to play the audio directly.
         return StreamingResponse(
             io.BytesIO(audio_out),
             media_type=content_type,

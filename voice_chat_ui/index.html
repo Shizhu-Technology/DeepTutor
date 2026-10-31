@@ -16,7 +16,7 @@
     .status {
       text-align: center;
       color: #64748b;
-      min-height: 24px;
+      min-height: 28px;
       margin-bottom: 16px;
     }
     .panel { display: flex; justify-content: center; gap: 16px; margin: 24px 0; }
@@ -112,12 +112,25 @@
     let mediaRecorder;
     let audioChunks = [];
     let isRecording = false;
+    let statusTimer = null;
+    let startTime = 0;
 
     function decodeBase64Unicode(str) {
       try {
         return decodeURIComponent(escape(atob(str)));
       } catch (e) {
         return atob(str);
+      }
+    }
+
+    function updateWorkingStatus() {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      if (elapsed < 4) {
+        statusEl.textContent = `正在识别语音…(${elapsed}s)`;
+      } else if (elapsed < 10) {
+        statusEl.textContent = `正在思考回复…(${elapsed}s)`;
+      } else {
+        statusEl.textContent = `正在合成语音…(${elapsed}s)`;
       }
     }
 
@@ -153,7 +166,9 @@
       if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
       isRecording = false;
       recordBtn.disabled = true;
-      statusEl.textContent = '正在识别和思考…';
+      startTime = Date.now();
+      statusTimer = setInterval(updateWorkingStatus, 1000);
+      updateWorkingStatus();
       mediaRecorder.stop();
     }
 
@@ -163,8 +178,12 @@
       form.append('audio', blob, `recording.${ext}`);
       form.append('persona', 'tutor');
 
+      const abortCtl = new AbortController();
+      const TO = setTimeout(() => abortCtl.abort(), 25000);
+
       try {
-        const resp = await fetch('/voice/chat', { method: 'POST', body: form });
+        const resp = await fetch('/voice/chat', { method: 'POST', body: form, signal: abortCtl.signal });
+        clearTimeout(TO);
         if (!resp.ok) {
           const errText = await resp.text();
           throw new Error(`HTTP ${resp.status}: ${errText}`);
@@ -177,12 +196,18 @@
         resultEl.style.display = 'block';
         statusEl.textContent = '完成';
       } catch (err) {
-        statusEl.textContent = '出错：' + err.message;
+        clearTimeout(TO);
+        if (err.name === 'AbortError') {
+          statusEl.textContent = '处理超时（25s），请缩短问题或稍后再试';
+        } else {
+          statusEl.textContent = '出错：' + err.message;
+        }
         console.error(err);
       } finally {
         recordBtn.disabled = false;
         recordBtn.classList.remove('recording');
         recordBtn.textContent = '按住说话 / 点击开始';
+        if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
       }
     }
 
