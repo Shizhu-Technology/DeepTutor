@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""A tiny web UI + proxy for DeepTutor voice chat.
+"""Simple web UI + proxy for DeepTutor voice chat.
 
 Usage:
     cd voice_chat_ui
     python3 run.py
-
-Environment variables:
-    DEEPTUTOR_URL   Backend base URL (default: http://localhost:8001)
-    VOICE_UI_PORT   Port for this UI server (default: 8080)
-    DEEPTUTOR_TOKEN Optional Bearer token forwarded to the backend.
 """
 
 from __future__ import annotations
@@ -50,8 +45,6 @@ class VoiceUIHandler(SimpleHTTPRequestHandler):
         target_path: str,
         body: bytes,
         content_type: str,
-        *,
-        extra_headers: dict[str, str] | None = None,
     ) -> None:
         target = f"{BACKEND_URL}{target_path}"
         headers = {
@@ -59,8 +52,6 @@ class VoiceUIHandler(SimpleHTTPRequestHandler):
             "Content-Length": str(len(body)),
             "Accept": "*/*",
         }
-        if extra_headers:
-            headers.update(extra_headers)
         token = os.environ.get("DEEPTUTOR_TOKEN")
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -90,11 +81,17 @@ class VoiceUIHandler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         content_type = self.headers.get("Content-Type", "application/octet-stream")
 
-        if self.path == "/voice/chat" or self.path == "/voice/chat/text":
-            self._forward(self.path.replace("/voice", "/api/voice", 1), body, content_type)
+        if self.path == "/voice/stt":
+            self._forward("/api/voice/stt", body, content_type)
+            return
+        if self.path == "/voice/chat/reply":
+            self._forward("/api/voice/chat/reply", body, content_type)
             return
         if self.path == "/voice/tts":
             self._forward("/api/voice/tts", body, content_type)
+            return
+        if self.path == "/voice/chat" or self.path == "/voice/chat/text":
+            self._forward(self.path.replace("/voice", "/api/voice", 1), body, content_type)
             return
 
         self.send_error(404)

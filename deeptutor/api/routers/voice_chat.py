@@ -1,7 +1,4 @@
-"""Voice chat endpoints: audio in, audio/text out.
-
-    audio -> STT -> DeepTutor chat -> {text, audio}
-"""
+"""Voice chat endpoints: audio in, audio/text out."""
 
 from __future__ import annotations
 
@@ -98,30 +95,6 @@ async def _run_chat_turn(
     return session, turn, reply_text
 
 
-async def _read_and_validate_audio(audio: UploadFile) -> bytes:
-    audio_bytes = await audio.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty audio upload.")
-    if len(audio_bytes) > _MAX_AUDIO_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Audio exceeds the 25 MB limit.",
-        )
-    return audio_bytes
-
-
-async def _transcribe_for_chat(audio_bytes: bytes, audio: UploadFile, language: str | None) -> str:
-    try:
-        return await transcribe_audio(
-            audio_bytes,
-            filename=audio.filename or "audio.webm",
-            content_type=audio.content_type or "application/octet-stream",
-            language=language,
-        )
-    except VoiceProviderError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-
 async def _chat_reply(
     transcript: str,
     *,
@@ -132,7 +105,7 @@ async def _chat_reply(
     if not transcript.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Speech could not be transcribed.",
+            detail="Empty transcript.",
         )
 
     try:
@@ -169,34 +142,27 @@ async def _chat_reply(
     return session, turn, reply_text
 
 
-@router.post("/chat/text")
-async def voice_chat_text(
+@router.post("/chat/reply")
+async def voice_chat_reply(
     request: Request,
-    audio: UploadFile = File(...),
+    text: str = Form(...),
     persona: str | None = Form(default=None),
     session_id: str | None = Form(default=None),
     language: str | None = Form(default=None),
 ) -> JSONResponse:
-    """Audio -> STT -> DeepTutor chat. Returns text only (fast)."""
+    """Text -> DeepTutor chat reply. Used by the simple UI after STT."""
     t0 = time.monotonic()
-    audio_bytes = await _read_and_validate_audio(audio)
-    transcript = await _transcribe_for_chat(audio_bytes, audio, language)
-    logger.info("voice_chat_text: STT done in %.2fs, transcript=%r", time.monotonic() - t0, transcript[:60])
-
-    t1 = time.monotonic()
     session, turn, reply_text = await _chat_reply(
-        transcript,
+        text,
         persona=persona,
         session_id=session_id,
         language=language,
     )
-    logger.info("voice_chat_text: chat done in %.2fs", time.monotonic() - t1)
-
+    logger.info("voice_chat_reply: done in %.2fs, reply=%.80s", time.monotonic() - t0, reply_text)
     return JSONResponse(
         content={
             "session_id": str(session.get("id", "")),
             "turn_id": str(turn.get("id", "")),
-            "transcript": transcript.strip(),
             "reply": reply_text,
         },
         headers={"Cache-Control": "no-store"},
@@ -212,10 +178,20 @@ async def voice_chat(
     language: str | None = Form(default=None),
     output: Literal["json", "audio"] = Query(default="json"),
 ) -> JSONResponse | StreamingResponse:
-    """Audio -> STT -> chat -> TTS. Returns JSON (with audio base64) or raw audio."""
+    """Audio -> STT -> chat -> TTS. Returns JSON or raw audio."""
     t0 = time.monotonic()
-    audio_bytes = await _read_and_validate_audio(audio)
-    transcript = await _transcribe_for_chat(audio_bytes, audio, language)
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty audio upload.")
+    if len(audio_bytes) > _MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Audio too large.")
+
+    transcript = await transcribe_audio(
+        audio_bytes,
+        filename=audio.filename or "audio.webm",
+        content_type=audio.content_type or "application/octet-stream",
+        language=language,
+    )
     logger.info("voice_chat: STT done in %.2fs", time.monotonic() - t0)
 
     session, turn, reply_text = await _chat_reply(

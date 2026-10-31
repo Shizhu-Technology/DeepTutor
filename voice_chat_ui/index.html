@@ -128,7 +128,7 @@
     function appendMessage(role, html) {
       const wrapper = document.createElement('div');
       wrapper.className = 'msg ' + role;
-      const label = role === 'user' ? '我（语音转文字）' : 'AI 助教';
+      const label = role === 'user' ? '我（语音）' : 'AI 助教';
       wrapper.innerHTML = '<div class="msg-label">' + label + '</div>' + html;
       chatEl.appendChild(wrapper);
       chatEl.scrollTop = chatEl.scrollHeight;
@@ -150,7 +150,7 @@
       mediaRecorder.onstop = () => {
         stream.getTracks().forEach(t => t.stop());
         const mimeType = mediaRecorder.mimeType || 'audio/webm';
-        sendTextThenAudio(new Blob(audioChunks, { type: mimeType }), mimeType);
+        handleRecording(new Blob(audioChunks, { type: mimeType }), mimeType);
       };
       mediaRecorder.start(200);
       isRecording = true;
@@ -163,35 +163,43 @@
       if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
       isRecording = false;
       recordBtn.disabled = true;
-      appendMessage('user', '<i>🎤 语音消息</i>');
       statusEl.textContent = '正在识别语音…';
       mediaRecorder.stop();
     }
 
-    async function sendTextThenAudio(blob, mimeType) {
-      const form = new FormData();
+    async function handleRecording(blob, mimeType) {
       const ext = mimeType.includes('mp4') ? 'm4a' : (mimeType.includes('webm') ? 'webm' : 'bin');
-      form.append('audio', blob, `recording.${ext}`);
-      form.append('persona', 'tutor');
-      if (sessionId) form.append('session_id', sessionId);
+      const audioFile = new File([blob], `recording.${ext}`, { type: mimeType });
+      const sttForm = new FormData();
+      sttForm.append('file', audioFile);
 
       try {
-        // 1. STT + chat text
-        const resp = await fetch('/voice/chat/text', { method: 'POST', body: form });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-        const data = await resp.json();
-        sessionId = data.session_id || sessionId;
+        // 1. 先识别语音，快速显示文字
+        const sttResp = await fetch('/voice/stt', { method: 'POST', body: sttForm });
+        if (!sttResp.ok) throw new Error(`STT HTTP ${sttResp.status}: ${await sttResp.text()}`);
+        const sttData = await sttResp.json();
+        const transcript = sttData.text || sttData.transcript || '';
+        appendMessage('user', escapeHtml(transcript));
+        statusEl.textContent = '语音已识别，正在思考…';
 
-        chatEl.lastElementChild.outerHTML = '';
-        appendMessage('user', escapeHtml(data.transcript));
-        appendMessage('assistant', escapeHtml(data.reply));
-        statusEl.textContent = '回复已显示，正在合成语音…';
+        // 2. 拿 DeepTutor 文字回复
+        const replyForm = new FormData();
+        replyForm.append('text', transcript);
+        replyForm.append('persona', 'tutor');
+        if (sessionId) replyForm.append('session_id', sessionId);
 
-        // 2. 单独合成语音并播放
+        const replyResp = await fetch('/voice/chat/reply', { method: 'POST', body: replyForm });
+        if (!replyResp.ok) throw new Error(`Reply HTTP ${replyResp.status}: ${await replyResp.text()}`);
+        const replyData = await replyResp.json();
+        sessionId = replyData.session_id || sessionId;
+        appendMessage('assistant', escapeHtml(replyData.reply));
+        statusEl.textContent = '正在合成语音…';
+
+        // 3. 合成语音并播放
         const ttsResp = await fetch('/voice/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: data.reply }),
+          body: JSON.stringify({ text: replyData.reply }),
         });
         if (!ttsResp.ok) throw new Error(`TTS HTTP ${ttsResp.status}: ${await ttsResp.text()}`);
         const audioBlob = await ttsResp.blob();
