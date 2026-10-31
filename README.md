@@ -63,11 +63,12 @@ python3 run.py
 
 ## 打包成 Android APK
 
-也提供了极简 Android App：只有一个录音按钮，按住说话，松开后自动播放 DeepTutor 语音回复，无需额外 UI 页面。
+也提供了极简 Android App：**没有录音按钮，也没有聊天页面**。打开后选择一段音频文件，App 自动调用后端并播放语音回复。
 
 ```bash
 cd mobile
 # 把 www/index.html 里的后端地址改成你电脑的 IP
+npm install
 npx cap sync android
 npx cap open android
 ```

@@ -1,15 +1,19 @@
 # DeepTutor Voice Android APK
 
-极简语音交互 App：按住录音 → 松开后自动调用后端 → 播放 DeepTutor 语音回复。没有复杂对话页面。
+极简语音交互 App：**没有录音按钮，也没有聊天页面**。只需要选择一段音频文件，App 就会：
+
+1. 把音频发给电脑上的 DeepTutor 后端
+2. 获取识别文字 + DeepTutor 回复文字
+3. 自动播放语音回复
 
 ## 运行原理
 
-App 是一个本地单页应用，通过 WiFi 直接调用电脑上的 DeepTutor 后端：
+App 是一个本地单页应用，通过 WiFi 直接调用电脑后端：
 
 ```
-手机端 → http://<PC_IP>:8001/api/voice/chat/base64
-       → 后端返回文字 + base64 音频
-       → App 自动播放
+手机选择音频 → http://<PC_IP>:8001/api/voice/chat/base64
+              → 后端返回文字 + base64 音频
+              → App 自动播放
 ```
 
 电脑端只需要启动 DeepTutor 后端，不需要再单独启动 UI 服务器。
@@ -28,13 +32,13 @@ deeptutor serve --port 8001
 
 ## 修改后端地址
 
-1. 打开 `mobile/www/index.html`，找到 `input#backendUrl` 的默认值：
+打开 `www/index.html`，把输入框默认值：
 
 ```html
 <input id="backendUrl" value="http://YOUR_PC_IP:8001" ...>
 ```
 
-2. 把 `YOUR_PC_IP` 改成你电脑的内网 IP（例如 `192.168.31.123`）。
+改成你电脑的内网 IP，例如 `http://192.168.31.123:8001`。
 
 获取电脑 IP：
 
@@ -44,10 +48,11 @@ ifconfig | grep "inet "
 
 > 也可以不修改源码，首次在 App 里手动输入后端地址。
 
-3. 同步到 Android 项目：
+改完后同步：
 
 ```bash
 cd mobile
+npm install
 npx cap sync android
 ```
 
@@ -64,15 +69,15 @@ npx cap open android
 
 1. 等待 Gradle sync 完成。
 2. 点击 **Build → Build Bundle(s) / APK(s) → Build APK(s)**。
-3. APK 输出路径：`mobile/android/app/build/outputs/apk/debug/app-debug.apk`
+3. APK 路径：`android/app/build/outputs/apk/debug/app-debug.apk`
 
-安装到手机后，首次使用允许麦克风权限，输入后端地址，按住按钮说话即可。
+安装到手机后，选择任意音频文件即可触发语音对话。
 
-## 可能会用到的权限
+## 权限
 
 `AndroidManifest.xml` 已包含：
 
 - `INTERNET`
-- `RECORD_AUDIO`
+- `RECORD_AUDIO`（预留，当前版本不直接录音）
 - `MODIFY_AUDIO_SETTINGS`
 - `usesCleartextTraffic="true"`

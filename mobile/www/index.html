@@ -20,36 +20,30 @@
       min-height: 100vh;
       padding: 24px;
     }
-    input#backendUrl {
+    input[type="text"] {
       width: 100%;
       max-width: 360px;
       padding: 10px 12px;
       border: 1px solid #cbd5e1;
       border-radius: 8px;
       font-size: 14px;
-      margin-bottom: 32px;
+      margin-bottom: 24px;
     }
-    #recordBtn {
-      width: 170px;
-      height: 170px;
+    input[type="file"] {
+      display: none;
+    }
+    #pickBtn {
+      padding: 16px 40px;
       border: none;
-      border-radius: 50%;
+      border-radius: 9999px;
       background: #2563eb;
       color: #fff;
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 600;
       box-shadow: 0 10px 30px rgba(37, 99, 235, 0.35);
-      user-select: none;
-      touch-action: manipulation;
     }
-    #recordBtn:active, #recordBtn.recording {
-      background: #dc2626;
-      transform: scale(0.98);
-    }
-    #recordBtn:disabled {
-      background: #94a3b8;
-      box-shadow: none;
-    }
+    #pickBtn:active { transform: scale(0.98); }
+    #pickBtn:disabled { background: #94a3b8; box-shadow: none; }
     #status {
       margin-top: 24px;
       color: #64748b;
@@ -75,9 +69,10 @@
 </head>
 <body>
   <div class="container">
-    <input id="backendUrl" value="http://YOUR_PC_IP:8001" placeholder="后端地址，如 http://192.168.1.5:8001">
-    <button id="recordBtn">按住说话</button>
-    <div id="status">点击按钮开始录音</div>
+    <input id="backendUrl" type="text" value="http://YOUR_PC_IP:8001" placeholder="后端地址">
+    <input id="audioInput" type="file" accept="audio/*">
+    <button id="pickBtn">选择音频文件</button>
+    <div id="status">点击按钮选择音频</div>
     <div id="textResult">
       <p><span class="label">识别：</span><span id="transcript"></span></p>
       <p><span class="label">回复：</span><span id="reply"></span></p>
@@ -88,67 +83,43 @@
 
   <script>
     const backendInput = document.getElementById('backendUrl');
-    const recordBtn = document.getElementById('recordBtn');
+    const audioInput = document.getElementById('audioInput');
+    const pickBtn = document.getElementById('pickBtn');
     const statusEl = document.getElementById('status');
     const textResult = document.getElementById('textResult');
     const transcriptEl = document.getElementById('transcript');
     const replyEl = document.getElementById('reply');
     const audioPlayer = document.getElementById('audioPlayer');
+    let sessionId = '';
 
     backendInput.value = localStorage.getItem('dt_backend_url') || backendInput.value;
     backendInput.addEventListener('change', () => localStorage.setItem('dt_backend_url', backendInput.value));
 
-    let mediaRecorder;
-    let chunks = [];
-    let isRecording = false;
-    let sessionId = '';
+    pickBtn.addEventListener('click', () => audioInput.click());
 
-    function blobToBase64(blob) {
+    audioInput.addEventListener('change', async () => {
+      const file = audioInput.files[0];
+      if (!file) return;
+      await processFile(file);
+      audioInput.value = '';
+    });
+
+    function fileToBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64 = reader.result.split(',')[1];
-          resolve(base64);
-        };
+        reader.onloadend = () => resolve(reader.result.split(',')[1]);
         reader.onerror = reject;
-        reader.readAsDataURL(blob);
+        reader.readAsDataURL(file);
       });
     }
 
-    async function startRecording() {
-      chunks = [];
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
-      let type = '';
-      for (const t of types) if (MediaRecorder.isTypeSupported(t)) { type = t; break; }
-      mediaRecorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
-      mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-        sendAudio(blob);
-      };
-      mediaRecorder.start(200);
-      isRecording = true;
-      recordBtn.classList.add('recording');
-      recordBtn.textContent = '松开结束';
-      statusEl.textContent = '正在录音…';
-    }
-
-    function stopRecording() {
-      if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
-      isRecording = false;
-      recordBtn.disabled = true;
-      recordBtn.classList.remove('recording');
-      statusEl.textContent = '正在发送…';
-      mediaRecorder.stop();
-    }
-
-    async function sendAudio(blob) {
+    async function processFile(file) {
       const backendUrl = backendInput.value.replace(/\/$/, '');
+      pickBtn.disabled = true;
+      statusEl.textContent = '正在发送音频…';
       try {
-        statusEl.textContent = '正在识别语音…';
-        const b64 = await blobToBase64(blob);
+        const b64 = await fileToBase64(file);
+        statusEl.textContent = '正在识别与思考…';
         const resp = await fetch(`${backendUrl}/api/voice/chat/base64`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -173,15 +144,9 @@
         statusEl.textContent = '出错：' + err.message;
         console.error(err);
       } finally {
-        recordBtn.disabled = false;
-        recordBtn.textContent = '按住说话';
+        pickBtn.disabled = false;
       }
     }
-
-    recordBtn.addEventListener('touchstart', (e) => { e.preventDefault(); if (!isRecording) startRecording(); });
-    recordBtn.addEventListener('touchend', (e) => { e.preventDefault(); if (isRecording) stopRecording(); });
-    recordBtn.addEventListener('mousedown', (e) => { e.preventDefault(); if (!isRecording) startRecording(); });
-    recordBtn.addEventListener('mouseup', (e) => { e.preventDefault(); if (isRecording) stopRecording(); });
   </script>
 </body>
 </html>
