@@ -1,0 +1,44 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [feature/voice-chat-bailian-asr]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Capacitor dependencies
+        working-directory: ./mobile
+        run: npm install
+
+      - name: Sync Android platform
+        working-directory: ./mobile
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: ./mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: deeptutor-voice-apk
+          path: ./mobile/android/app/build/outputs/apk/debug/app-debug.apk
