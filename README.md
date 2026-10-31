@@ -61,6 +61,19 @@ python3 run.py
 
 ---
 
+## 打包成 Android APK
+
+也提供了 Capacitor 套壳项目，可以把语音 UI 做成安装包：
+
+```bash
+cd mobile
+# 先把 capacitor.config.json 里的 server.url 改成你电脑的 IP
+npx cap sync android
+npx cap open android
+```
+
+然后在 Android Studio 里 Build → Build APK。详见 `mobile/README.md`。
+
 ## 原项目
 
 如果想查看 DeepTutor 原版代码与文档，请访问：

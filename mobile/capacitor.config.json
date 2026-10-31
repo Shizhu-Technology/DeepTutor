@@ -1,0 +1,17 @@
+{
+  "appId": "com.shizhutech.deeptutorvoice",
+  "appName": "DeepTutor Voice",
+  "webDir": "www",
+  "server": {
+    "url": "http://YOUR_PC_IP:8080",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}
