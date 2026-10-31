@@ -11,11 +11,12 @@ service's durable chat turn.
 from __future__ import annotations
 
 import base64
+import io
 import logging
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from deeptutor.app import DeepTutorApp, TurnRequest
 from deeptutor.services.voice import VoiceProviderError, synthesize_speech, transcribe_audio
@@ -103,15 +104,24 @@ async def _run_chat_turn(
     return session, turn, reply_text
 
 
-@router.post("/chat")
+@router.post("/chat", response_model=None)
 async def voice_chat(
     request: Request,
     audio: UploadFile = File(...),
     persona: str | None = Form(default=None),
     session_id: str | None = Form(default=None),
     language: str | None = Form(default=None),
-) -> JSONResponse:
-    """Accept an audio clip, transcribe it, ask DeepTutor, and return TTS audio."""
+    output: Literal["json", "audio"] = Query(
+        default="json",
+        description='Return format: "json" (default, with base64 audio) or "audio" (raw audio stream).',
+    ),
+) -> JSONResponse | StreamingResponse:
+    """Accept an audio clip, transcribe it, ask DeepTutor, and return TTS audio.
+
+    Set ``output=audio`` to receive the reply as a raw audio stream (easier
+    for mobile/WebRTC clients).  The default ``output=json`` also returns the
+    transcript and reply text for UI display.
+    """
     audio_bytes = await audio.read()
     if not audio_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty audio upload.")
@@ -183,6 +193,21 @@ async def voice_chat(
     except VoiceProviderError as exc:
         logger.warning("TTS provider error: %s", exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    if output == "audio":
+        # Return the raw audio stream; metadata travels in headers for clients
+        # that just want to play the audio directly.
+        return StreamingResponse(
+            io.BytesIO(audio_out),
+            media_type=content_type,
+            headers={
+                "X-Session-Id": str(session.get("id", "")),
+                "X-Turn-Id": str(turn.get("id", "")),
+                "X-Transcript": base64.b64encode(transcript.strip().encode("utf-8")).decode("ascii"),
+                "X-Reply": base64.b64encode(reply_text.strip().encode("utf-8")).decode("ascii"),
+                "Cache-Control": "no-store",
+            },
+        )
 
     return JSONResponse(
         content={

@@ -1,238 +1,175 @@
-# DeepTutor 语音对话接入说明
+# DeepTutor 语音对话接入指南（开发版）
 
-一句话：客户端上传一段语音，服务端返回语音回复，中间走 DeepTutor 的 chat 能力。
+一句话：客户端上传一段语音，服务端返回语音回复，中间自动走 DeepTutor chat。
 
 ```
-音频 ──STT──> 文字 ──> DeepTutor chat ──> 回复文字 ──TTS──> 音频
+用户音频 → STT → 文字 → DeepTutor chat → 回复文字 → TTS → 回复音频
 ```
 
 ---
 
-## 1. 新增接口
+## 1. 一键安装
+
+在 DeepTutor 项目根目录执行：
+
+```bash
+./setup_voice_chat.sh
+```
+
+脚本会完成：
+
+1. 安装 Python 依赖（含 `dashscope>=2.0.0`）。
+2. 检查并安装 `ffmpeg`（Linux apt / macOS brew）。
+3. 写入 `data/user/settings/model_catalog.json`：
+   - LLM：`MiniMax-M3`
+   - TTS：`MiniMax speech-2.8-hd`，音色 `male-qn-qingse`
+   - STT：`qwen-audio-3.1-asr-flash-streaming`（阿里云百炼）
+4. 创建默认 persona `tutor`。
+5. 启动 `deeptutor serve --port 8001`。
+
+可选参数：
+
+```bash
+./setup_voice_chat.sh --no-start   # 只安装配置，不启动服务
+./setup_voice_chat.sh --no-ffmpeg  # 跳过 ffmpeg 安装检查
+```
+
+> ⚠️ 生产环境建议把脚本里的硬编码 API Key 改为读取环境变量，并重新生成 Key。
+
+---
+
+## 2. 核心接口
 
 ### `POST /api/voice/chat`
 
-#### 请求
-
-multipart/form-data：
+**请求**：`multipart/form-data`
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `audio` | File | 是 | 用户语音文件，支持 mp3 / wav / webm / m4a / ogg / flac / aac 等 |
-| `persona` | string | 否 | DeepTutor persona 名称，用来注入系统提示词 |
-| `session_id` | string | 否 | 会话 ID；不传则每次新建会话 |
+| `audio` | File | 是 | 用户语音文件，支持 mp3 / wav / webm / m4a / ogg / flac / aac |
+| `persona` | string | 否 | 系统提示词 persona 名称，默认 `tutor` |
+| `session_id` | string | 否 | DeepTutor 会话 ID，不传则新建会话 |
 | `language` | string | 否 | 语言提示，例如 `zh`、`en` |
+| `output` | query | 否 | `json`（默认）或 `audio` |
 
-#### 响应
+### 响应 A：`output=json`（默认）
 
 `application/json`：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `session_id` | string | 当前会话 ID |
+| `session_id` | string | 会话 ID |
 | `turn_id` | string | 当前 turn ID |
-| `transcript` | string | 语音识别结果 |
-| `reply` | string | DeepTutor 文本回复 |
-| `audio_base64` | string | 回复音频的 base64 编码 |
-| `audio_content_type` | string | 音频 MIME 类型，如 `audio/mpeg` |
+| `transcript` | string | 语音识别文本 |
+| `reply` | string | DeepTutor 文字回复 |
+| `audio_base64` | string | 回复音频 base64 |
+| `audio_content_type` | string | 音频 MIME，例如 `audio/mpeg` |
 
-#### curl 示例
+### 响应 B：`output=audio`
+
+直接返回 `audio/mpeg` 音频流，额外信息放在响应头：
+
+| 响应头 | 说明 |
+|---|---|
+| `X-Session-Id` | 会话 ID |
+| `X-Turn-Id` | 当前 turn ID |
+| `X-Transcript` | transcript 的 base64 |
+| `X-Reply` | reply 的 base64 |
+
+---
+
+## 3. 调用示例
+
+### curl — JSON 返回
 
 ```bash
-curl -X POST http://localhost:8001/api/voice/chat \
+curl -X POST "http://localhost:8001/api/voice/chat" \
   -F "audio=@/path/to/user_voice.mp3" \
   -F "persona=tutor"
 ```
 
-返回示例：
-
-```json
-{
-  "session_id": "ses_xxx",
-  "turn_id": "turn_xxx",
-  "transcript": "你好，请问你能帮我讲一讲傅里叶变换吗？",
-  "reply": "当然可以！傅里叶变换的核心思想是...",
-  "audio_base64": "SUQzBAAAAAA...",
-  "audio_content_type": "audio/mpeg"
-}
-```
-
-客户端把 `audio_base64` 解码后播放即可。
-
----
-
-## 2. 环境配置
-
-### 2.1 依赖
-
-安装代码后需要满足：
-
-- `dashscope>=2.0.0`
-- `ffmpeg`（STT 内部会把各种音频格式转成 16kHz WAV）
-
-重新安装依赖：
+### curl — 直接返回音频文件
 
 ```bash
-cd /path/to/DeepTutor
-python -m pip install -e .
-# 或
-python -m pip install -r requirements/full.txt
-```
-
-Docker 部署时，可在容器启动参数里加：
-
-```bash
-DEEPTUTOR_APT_PACKAGES=ffmpeg
-```
-
-### 2.2 模型目录配置
-
-配置文件路径：`data/user/settings/model_catalog.json`
-
-需要配置 3 个 provider：
-
-```json
-{
-  "services": {
-    "llm": {
-      "active_profile_id": "llm-minimax",
-      "active_model_id": "llm-minimax-model",
-      "profiles": [
-        {
-          "id": "llm-minimax",
-          "name": "MiniMax LLM",
-          "binding": "openai",
-          "base_url": "https://api.minimax.chat/v1",
-          "api_key": "<你的 MiniMax Key>",
-          "models": [
-            { "id": "llm-minimax-model", "name": "MiniMax-M3", "model": "MiniMax-M3" }
-          ]
-        }
-      ]
-    },
-    "tts": {
-      "active_profile_id": "tts-minimax",
-      "active_model_id": "tts-minimax-model",
-      "profiles": [
-        {
-          "id": "tts-minimax",
-          "name": "MiniMax TTS",
-          "binding": "minimax",
-          "base_url": "https://api.minimax.chat/v1",
-          "api_key": "<你的 MiniMax Key>",
-          "models": [
-            {
-              "id": "tts-minimax-model",
-              "name": "MiniMax speech-2.8-hd",
-              "model": "speech-2.8-hd",
-              "voice": "male-qn-qingse",
-              "response_format": "mp3"
-            }
-          ]
-        }
-      ]
-    },
-    "stt": {
-      "active_profile_id": "stt-dashscope-qwen",
-      "active_model_id": "stt-dashscope-qwen-model",
-      "profiles": [
-        {
-          "id": "stt-dashscope-qwen",
-          "name": "DashScope Qwen ASR Streaming",
-          "binding": "dashscope_qwen",
-          "base_url": "https://dashscope.aliyuncs.com/api/v1",
-          "api_key": "<你的 DashScope Key>",
-          "models": [
-            {
-              "id": "stt-dashscope-qwen-model",
-              "name": "qwen-audio-3.1-asr-flash-streaming",
-              "model": "qwen-audio-3.1-asr-flash-streaming"
-            }
-          ]
-        }
-      ]
-    }
-  }
-}
-```
-
-> `model_catalog.json` 默认在 `data/user/settings/` 下，**不在 git 里**，部署时需要单独放到服务器对应位置，或由管理员在 DeepTutor Settings 页面手动配置。
-
----
-
-## 3. 系统提示词
-
-DeepTutor 用 **Persona** 来注入系统提示词。
-
-### 创建 persona
-
-```bash
-curl -X POST http://localhost:8001/api/personas \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "tutor",
-    "description": "数学家教",
-    "content": "你是一位耐心且专业的数学家教。请用中文回答，尽量简洁，鼓励学生思考。"
-  }'
-```
-
-### 在语音对话中使用
-
-调用 `/api/voice/chat` 时带上 `persona=tutor` 即可。
-
----
-
-## 4. 启动服务
-
-### 本地
-
-```bash
-cd /path/to/DeepTutor
-deeptutor serve
-```
-
-### Docker
-
-```bash
-deeptutor docker compose up
-```
-
-服务启动后，接口在 `http://localhost:8001/api/voice/chat`。
-
----
-
-## 5. 其他可用语音接口
-
-除 `/api/voice/chat` 外，还保留了原来的独立接口，方便单独调试：
-
-### STT
-
-```bash
-curl -F "file=@user_voice.mp3" http://localhost:8001/api/voice/stt
-```
-
-### TTS
-
-```bash
-curl -X POST http://localhost:8001/api/voice/tts \
-  -H "Content-Type: application/json" \
-  -d '{"text":"你好，我是 DeepTutor"}' \
+curl -X POST "http://localhost:8001/api/voice/chat?output=audio" \
+  -F "audio=@/path/to/user_voice.mp3" \
+  -F "persona=tutor" \
   --output reply.mp3
 ```
 
+### Python — 直接播放音频
+
+```python
+import base64
+import requests
+
+url = "http://localhost:8001/api/voice/chat"
+with open("user_voice.mp3", "rb") as f:
+    files = {"audio": ("user_voice.mp3", f, "audio/mpeg")}
+    data = {"persona": "tutor"}
+    r = requests.post(url, files=files, data=data)
+    r.raise_for_status()
+    result = r.json()
+    print("识别:", result["transcript"])
+    print("回复:", result["reply"])
+    audio_bytes = base64.b64decode(result["audio_base64"])
+    with open("reply.mp3", "wb") as out:
+        out.write(audio_bytes)
+```
+
 ---
 
-## 6. 常见问题
+## 4. 认证说明
+
+`server.json` 中本接口默认 `auth: "learning"`，即需要登录后的 DeepTutor session/cookie。
+
+如果是外部系统匿名调用，建议：
+
+1. 先调用登录接口获取 token；或
+2. 临时把 `deeptutor/modules/manifests/server.json` 中该路由的 `auth` 改为 `public`（注意流量安全）。
+
+---
+
+## 5. 系统提示词 / Persona
+
+默认 persona 文件：`data/user/workspace/personas/tutor/PERSONA.md`
+
+内容示例：
+
+```markdown
+# tutor
+
+你是一位耐心、专业且友好的 AI 助教。请用中文回答，尽量简洁清晰，并在合适的时候鼓励学生独立思考。
+```
+
+调用时传 `persona=tutor` 即可使用该提示词。可新增 persona 并传入对应名称。
+
+---
+
+## 6. 单独调试已有接口
+
+| 接口 | 说明 |
+|---|---|
+| `POST /api/voice/stt` | 单独语音识别：`curl -F "file=@voice.mp3" http://localhost:8001/api/voice/stt` |
+| `POST /api/voice/tts` | 单独语音合成：`curl -X POST http://localhost:8001/api/voice/tts -d '{"text":"你好"}' --output tts.mp3` |
+
+---
+
+## 7. 常见问题
 
 | 现象 | 原因 | 解决 |
 |---|---|---|
-| 调用 `/api/voice/stt` 报 ffmpeg 错误 | 系统缺少 ffmpeg | 安装 ffmpeg，或在 Docker 环境加 `DEEPTUTOR_APT_PACKAGES=ffmpeg` |
-| STT 报 `Unsupported Qwen ASR model` | 模型名不是 streaming 版本 | 使用 `qwen-audio-3.1-asr-flash-streaming` |
-| LLM 报配置错误 | `model_catalog.json` 没配 LLM | 检查 `services.llm` 配置 |
-| 返回里没有音频，但 transcript 有值 | TTS 配置错误或 MiniMax key 余额不足 | 检查 `services.tts` 配置及 MiniMax 账户 |
+| STT 报 ffmpeg 错误 | 系统没有 ffmpeg | 安装 ffmpeg，或在 Docker 中设置 `DEEPTUTOR_APT_PACKAGES=ffmpeg` |
+| STT 报模型不支持 | 模型名错误 | 确认使用 `qwen-audio-3.1-asr-flash-streaming` |
+| LLM 报配置错误 | `model_catalog.json` 缺少 LLM | 运行 `./setup_voice_chat.sh` 或手动配置 `services.llm` |
+| 返回无音频 | TTS 配置错误或 MiniMax 余额不足 | 检查 `services.tts` 与 MiniMax 账户 |
 
 ---
 
-## 7. 当前代码分支
+## 8. 代码位置
 
-功能在 `feature/voice-chat-bailian-asr`，合并到主分支后即可按上述方式使用。
+- 路由入口：`deeptutor/api/routers/voice_chat.py`
+- STT 适配器：`deeptutor/services/voice/adapters/dashscope_qwen.py`
+- 路由注册：`deeptutor/modules/manifests/server.json`
+- 配置生成：`setup_voice_chat.sh`
+- 开发分支：`feature/voice-chat-bailian-asr`
