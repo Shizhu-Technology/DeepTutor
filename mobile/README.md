@@ -1,17 +1,13 @@
 # DeepTutor Voice Android APK
 
-极简语音交互 App：**没有录音按钮，也没有聊天页面**。只需要选择一段音频文件，App 就会：
-
-1. 把音频发给电脑上的 DeepTutor 后端
-2. 获取识别文字 + DeepTutor 回复文字
-3. 自动播放语音回复
+极简语音交互 App：**没有聊天页面，只有一个录音按钮**。按住说话，松开后自动播放 DeepTutor 语音回复。
 
 ## 运行原理
 
-App 是一个本地单页应用，通过 WiFi 直接调用电脑后端：
+App 通过 WiFi 直接调用电脑后端：
 
 ```
-手机选择音频 → http://<PC_IP>:8001/api/voice/chat/base64
+手机按住录音 → http://<PC_IP>:8001/api/voice/chat/base64
               → 后端返回文字 + base64 音频
               → App 自动播放
 ```
@@ -71,13 +67,13 @@ npx cap open android
 2. 点击 **Build → Build Bundle(s) / APK(s) → Build APK(s)**。
 3. APK 路径：`android/app/build/outputs/apk/debug/app-debug.apk`
 
-安装到手机后，选择任意音频文件即可触发语音对话。
+安装到手机后，允许麦克风权限，按住按钮说话即可。
 
 ## 权限
 
 `AndroidManifest.xml` 已包含：
 
 - `INTERNET`
-- `RECORD_AUDIO`（预留，当前版本不直接录音）
+- `RECORD_AUDIO`
 - `MODIFY_AUDIO_SETTINGS`
 - `usesCleartextTraffic="true"`

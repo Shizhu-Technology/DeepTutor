@@ -20,30 +20,36 @@
       min-height: 100vh;
       padding: 24px;
     }
-    input[type="text"] {
+    input#backendUrl {
       width: 100%;
       max-width: 360px;
       padding: 10px 12px;
       border: 1px solid #cbd5e1;
       border-radius: 8px;
       font-size: 14px;
-      margin-bottom: 24px;
+      margin-bottom: 36px;
     }
-    input[type="file"] {
-      display: none;
-    }
-    #pickBtn {
-      padding: 16px 40px;
+    #recordBtn {
+      width: 170px;
+      height: 170px;
       border: none;
-      border-radius: 9999px;
+      border-radius: 50%;
       background: #2563eb;
       color: #fff;
-      font-size: 18px;
+      font-size: 20px;
       font-weight: 600;
       box-shadow: 0 10px 30px rgba(37, 99, 235, 0.35);
+      user-select: none;
+      touch-action: manipulation;
     }
-    #pickBtn:active { transform: scale(0.98); }
-    #pickBtn:disabled { background: #94a3b8; box-shadow: none; }
+    #recordBtn:active, #recordBtn.recording {
+      background: #dc2626;
+      transform: scale(0.98);
+    }
+    #recordBtn:disabled {
+      background: #94a3b8;
+      box-shadow: none;
+    }
     #status {
       margin-top: 24px;
       color: #64748b;
@@ -51,102 +57,96 @@
       min-height: 24px;
       text-align: center;
     }
-    #textResult {
-      display: none;
-      width: 100%;
-      max-width: 400px;
-      margin-top: 24px;
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 16px;
-      font-size: 14px;
-      line-height: 1.5;
-    }
-    #textResult p { margin: 8px 0; }
-    .label { color: #64748b; margin-right: 6px; }
   </style>
 </head>
 <body>
   <div class="container">
     <input id="backendUrl" type="text" value="http://YOUR_PC_IP:8001" placeholder="后端地址">
-    <input id="audioInput" type="file" accept="audio/*">
-    <button id="pickBtn">选择音频文件</button>
-    <div id="status">点击按钮选择音频</div>
-    <div id="textResult">
-      <p><span class="label">识别：</span><span id="transcript"></span></p>
-      <p><span class="label">回复：</span><span id="reply"></span></p>
-    </div>
+    <button id="recordBtn">按住说话</button>
+    <div id="status">按住按钮开始录音</div>
   </div>
 
   <audio id="audioPlayer"></audio>
 
   <script>
     const backendInput = document.getElementById('backendUrl');
-    const audioInput = document.getElementById('audioInput');
-    const pickBtn = document.getElementById('pickBtn');
+    const recordBtn = document.getElementById('recordBtn');
     const statusEl = document.getElementById('status');
-    const textResult = document.getElementById('textResult');
-    const transcriptEl = document.getElementById('transcript');
-    const replyEl = document.getElementById('reply');
     const audioPlayer = document.getElementById('audioPlayer');
+    let mediaRecorder;
+    let chunks = [];
+    let isRecording = false;
     let sessionId = '';
 
     backendInput.value = localStorage.getItem('dt_backend_url') || backendInput.value;
     backendInput.addEventListener('change', () => localStorage.setItem('dt_backend_url', backendInput.value));
 
-    pickBtn.addEventListener('click', () => audioInput.click());
-
-    audioInput.addEventListener('change', async () => {
-      const file = audioInput.files[0];
-      if (!file) return;
-      await processFile(file);
-      audioInput.value = '';
-    });
-
-    function fileToBase64(file) {
+    function blobToBase64(blob) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result.split(',')[1]);
         reader.onerror = reject;
-        reader.readAsDataURL(file);
+        reader.readAsDataURL(blob);
       });
     }
 
-    async function processFile(file) {
+    async function startRecording() {
+      chunks = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+      let type = '';
+      for (const t of types) if (MediaRecorder.isTypeSupported(t)) { type = t; break; }
+      mediaRecorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        sendAudio(new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' }));
+      };
+      mediaRecorder.start(200);
+      isRecording = true;
+      recordBtn.classList.add('recording');
+      recordBtn.textContent = '松开结束';
+      statusEl.textContent = '正在录音…';
+    }
+
+    function stopRecording() {
+      if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+      isRecording = false;
+      recordBtn.disabled = true;
+      recordBtn.classList.remove('recording');
+      statusEl.textContent = '正在发送…';
+      mediaRecorder.stop();
+    }
+
+    async function sendAudio(blob) {
       const backendUrl = backendInput.value.replace(/\/$/, '');
-      pickBtn.disabled = true;
-      statusEl.textContent = '正在发送音频…';
       try {
-        const b64 = await fileToBase64(file);
+        const b64 = await blobToBase64(blob);
         statusEl.textContent = '正在识别与思考…';
         const resp = await fetch(`${backendUrl}/api/voice/chat/base64`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            audio_base64: b64,
-            persona: 'tutor',
-            session_id: sessionId,
-          }),
+          body: JSON.stringify({ audio_base64: b64, persona: 'tutor', session_id: sessionId }),
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
         const data = await resp.json();
         sessionId = data.session_id || sessionId;
-
-        transcriptEl.textContent = data.transcript;
-        replyEl.textContent = data.reply;
-        textResult.style.display = 'block';
         statusEl.textContent = '完成';
-
         audioPlayer.src = `data:${data.audio_content_type};base64,${data.audio_base64}`;
         audioPlayer.play();
       } catch (err) {
         statusEl.textContent = '出错：' + err.message;
         console.error(err);
       } finally {
-        pickBtn.disabled = false;
+        recordBtn.disabled = false;
+        recordBtn.textContent = '按住说话';
       }
     }
+
+    recordBtn.addEventListener('touchstart', e => { e.preventDefault(); if (!isRecording) startRecording(); });
+    recordBtn.addEventListener('touchend', e => { e.preventDefault(); if (isRecording) stopRecording(); });
+    recordBtn.addEventListener('mousedown', e => { e.preventDefault(); if (!isRecording) startRecording(); });
+    recordBtn.addEventListener('mouseup', e => { e.preventDefault(); if (isRecording) stopRecording(); });
   </script>
 </body>
 </html>
