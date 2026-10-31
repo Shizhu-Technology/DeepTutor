@@ -1,11 +1,6 @@
 """Voice chat endpoint: audio in, audio out.
 
-This is a convenience wrapper for a single-turn voice interaction:
-
     audio -> STT -> DeepTutor chat (with optional persona) -> TTS -> audio
-
-It reuses DeepTutor's configured TTS/STT providers and the application
-service's durable chat turn.
 """
 
 from __future__ import annotations
@@ -21,17 +16,17 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from deeptutor.app import DeepTutorApp, TurnRequest
 from deeptutor.services.voice import VoiceProviderError, synthesize_speech, transcribe_audio
-from deeptutor.services.voice.base import VoiceProviderTimeout
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 router = APIRouter()
 
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
+_MAX_REPLY_CHARS = 120
 
 
 def _collect_text(events: list[dict[str, Any]]) -> str:
-    """Pick the assistant's final answer text out of a streamed turn."""
     round_buffers: dict[str, str] = {}
     round_order: list[str] = []
     legacy_buffer = ""
@@ -112,11 +107,9 @@ async def voice_chat(
     language: str | None = Form(default=None),
     output: Literal["json", "audio"] = Query(default="json"),
 ) -> JSONResponse | StreamingResponse:
-    """Accept an audio clip, transcribe it, ask DeepTutor, and return TTS audio."""
     t0 = time.monotonic()
     audio_bytes = await audio.read()
-    t_read = time.monotonic()
-    logger.info("voice_chat: read %d bytes in %.2fs", len(audio_bytes), t_read - t0)
+    logger.info("voice_chat: received %d bytes", len(audio_bytes))
 
     if not audio_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty audio upload.")
@@ -134,7 +127,7 @@ async def voice_chat(
             content_type=audio.content_type or "application/octet-stream",
             language=language,
         )
-        logger.info("voice_chat: STT done in %.2fs, transcript=%r", time.monotonic() - t_read, transcript[:80])
+        logger.info("voice_chat: STT done in %.2fs", time.monotonic() - t0)
     except VoiceProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
@@ -152,7 +145,7 @@ async def voice_chat(
         workspace_id = None
 
     app = DeepTutorApp(workspace_id=workspace_id)
-    t_chat_start = time.monotonic()
+    t1 = time.monotonic()
     try:
         session, turn, reply_text = await _run_chat_turn(
             app,
@@ -161,7 +154,7 @@ async def voice_chat(
             session_id=session_id,
             language=language,
         )
-        logger.info("voice_chat: chat done in %.2fs, reply=%.80s", time.monotonic() - t_chat_start, reply_text)
+        logger.info("voice_chat: chat done in %.2fs, reply_len=%d", time.monotonic() - t1, len(reply_text))
     except Exception as exc:
         logger.exception("DeepTutor turn failed")
         raise HTTPException(
@@ -175,11 +168,17 @@ async def voice_chat(
             detail="DeepTutor returned an empty response.",
         )
 
+    # Truncate to a single short sentence to keep TTS fast
+    reply_text = reply_text.strip()
+    if len(reply_text) > _MAX_REPLY_CHARS:
+        reply_text = reply_text[:_MAX_REPLY_CHARS].rsplit("，", 1)[0] + "…"
+        logger.info("voice_chat: reply truncated to %d chars", len(reply_text))
+
     # 3. Text-to-speech
-    t_tts_start = time.monotonic()
+    t2 = time.monotonic()
     try:
         audio_out, content_type = await synthesize_speech(reply_text)
-        logger.info("voice_chat: TTS done in %.2fs, %d bytes", time.monotonic() - t_tts_start, len(audio_out))
+        logger.info("voice_chat: TTS done in %.2fs, audio=%d bytes", time.monotonic() - t2, len(audio_out))
     except VoiceProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
@@ -193,7 +192,7 @@ async def voice_chat(
                 "X-Session-Id": str(session.get("id", "")),
                 "X-Turn-Id": str(turn.get("id", "")),
                 "X-Transcript": base64.b64encode(transcript.strip().encode("utf-8")).decode("ascii"),
-                "X-Reply": base64.b64encode(reply_text.strip().encode("utf-8")).decode("ascii"),
+                "X-Reply": base64.b64encode(reply_text.encode("utf-8")).decode("ascii"),
                 "Cache-Control": "no-store",
             },
         )
@@ -203,7 +202,7 @@ async def voice_chat(
             "session_id": str(session.get("id", "")),
             "turn_id": str(turn.get("id", "")),
             "transcript": transcript.strip(),
-            "reply": reply_text.strip(),
+            "reply": reply_text,
             "audio_base64": base64.b64encode(audio_out).decode("ascii"),
             "audio_content_type": content_type,
         },
