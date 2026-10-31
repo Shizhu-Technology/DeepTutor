@@ -418,6 +418,12 @@ STT_PROVIDERS: dict[str, VoiceProviderSpec] = {
         adapter="dashscope",
         default_model="paraformer-realtime-v2",
     ),
+    "dashscope_qwen": VoiceProviderSpec(
+        label="Aliyun Bailian Qwen ASR Streaming",
+        default_api_base="https://dashscope.aliyuncs.com/api/v1",
+        adapter="dashscope_qwen",
+        default_model="qwen-audio-3.1-asr-flash-streaming",
+    ),
     "openai": VoiceProviderSpec(
         label="OpenAI",
         default_api_base="https://api.openai.com/v1",

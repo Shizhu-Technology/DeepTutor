@@ -287,6 +287,17 @@
       "order": 772
     },
     {
+      "reference": "deeptutor.api.routers.voice_chat:router",
+      "options": {
+        "prefix": "/api/voice",
+        "tags": [
+          "voice"
+        ]
+      },
+      "auth": "learning",
+      "order": 776
+    },
+    {
       "reference": "deeptutor.api.routers.agent_config:router",
       "options": {
         "prefix": "/api/agent-config",

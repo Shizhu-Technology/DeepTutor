@@ -12,6 +12,7 @@ from deeptutor.services.voice.adapters.dashscope import (
     DashScopeSTTAdapter,
     DashScopeTTSAdapter,
 )
+from deeptutor.services.voice.adapters.dashscope_qwen import DashScopeQwenASRAdapter
 from deeptutor.services.voice.adapters.edge import EdgeTTSAdapter
 from deeptutor.services.voice.adapters.gemini import GeminiTTSAdapter
 from deeptutor.services.voice.adapters.mimo import MiMoTTSAdapter
@@ -39,6 +40,7 @@ STT_ADAPTERS: dict[str, BaseSTTAdapter] = {
     "volcengine": VolcengineSTTAdapter(),
     "openai_compat": OpenAICompatSTTAdapter(),
     "dashscope": DashScopeSTTAdapter(),
+    "dashscope_qwen": DashScopeQwenASRAdapter(),
 }
 
 
