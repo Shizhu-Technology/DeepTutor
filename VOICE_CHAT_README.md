@@ -63,6 +63,23 @@ curl -X POST "http://localhost:8001/api/voice/chat?output=audio" \
 
 响应头：`X-Session-Id`、`X-Turn-Id`、`X-Transcript`、`X-Reply`。
 
+## 浏览器 UI
+
+`voice_chat_ui/` 提供了一个简单的录音页面。
+
+```bash
+# 先启动 DeepTutor 后端
+deeptutor serve --port 8001
+
+# 再启动 UI
+cd voice_chat_ui
+python3 run.py
+```
+
+打开 `http://localhost:8080`，点击录音 → 说话 → 自动播放回复。
+
+详见 `voice_chat_ui/README.md`。
+
 ## 认证
 
 接口默认需要 DeepTutor 登录 session（`auth: learning`）。外部匿名调用请：
@@ -88,3 +105,4 @@ curl -X POST "http://localhost:8001/api/voice/chat?output=audio" \
 - STT 适配器：`deeptutor/services/voice/adapters/dashscope_qwen.py`
 - 路由注册：`deeptutor/modules/manifests/server.json`
 - 安装脚本：`setup_voice_chat.sh`
+- 简单 UI：`voice_chat_ui/`

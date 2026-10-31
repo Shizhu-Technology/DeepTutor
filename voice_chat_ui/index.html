@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepTutor 语音对话</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      max-width: 760px;
+      margin: 40px auto;
+      padding: 20px;
+      color: #1e293b;
+    }
+    h1 { text-align: center; margin-bottom: 8px; }
+    .status {
+      text-align: center;
+      color: #64748b;
+      min-height: 24px;
+      margin-bottom: 16px;
+    }
+    .panel { display: flex; justify-content: center; gap: 16px; margin: 24px 0; }
+    button {
+      padding: 14px 32px;
+      border: none;
+      border-radius: 9999px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 16px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
+    }
+    button:disabled { background: #94a3b8; cursor: not-allowed; box-shadow: none; }
+    button.recording { background: #dc2626; }
+    .box {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+    .box-title {
+      color: #475569;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+      line-height: 1.5;
+      font-size: 15px;
+    }
+    audio { width: 100%; margin-top: 8px; }
+    .hint {
+      text-align: center;
+      color: #94a3b8;
+      font-size: 13px;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <h1>DeepTutor 语音对话</h1>
+  <p class="status" id="status">点击录音按钮开始说话</p>
+
+  <div class="panel">
+    <button id="recordBtn" type="button">按住说话 / 点击开始</button>
+  </div>
+
+  <div id="result" style="display:none">
+    <div class="box">
+      <div class="box-title">识别文字</div>
+      <pre id="transcript"></pre>
+    </div>
+    <div class="box">
+      <div class="box-title">DeepTutor 回复</div>
+      <pre id="reply"></pre>
+    </div>
+    <div class="box">
+      <div class="box-title">语音回复</div>
+      <audio id="audioPlayer" controls></audio>
+    </div>
+  </div>
+
+  <p class="hint">
+    后端：<code id="backendAddr">http://localhost:8001</code> &nbsp;|&nbsp;
+    UI 端口：<code id="uiPort">8080</code>
+  </p>
+
+  <script>
+    const recordBtn = document.getElementById('recordBtn');
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+    const transcriptEl = document.getElementById('transcript');
+    const replyEl = document.getElementById('reply');
+    const audioPlayer = document.getElementById('audioPlayer');
+    const backendAddrEl = document.getElementById('backendAddr');
+    const uiPortEl = document.getElementById('uiPort');
+
+    fetch('/_info')
+      .then(r => r.json())
+      .then(info => {
+        backendAddrEl.textContent = info.backend_url;
+        uiPortEl.textContent = info.ui_port;
+      })
+      .catch(() => {});
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let isRecording = false;
+
+    function decodeBase64Unicode(str) {
+      try {
+        return decodeURIComponent(escape(atob(str)));
+      } catch (e) {
+        return atob(str);
+      }
+    }
+
+    async function startRecording() {
+      audioChunks = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      const preferredTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+      let selectedType = '';
+      for (const t of preferredTypes) {
+        if (MediaRecorder.isTypeSupported(t)) { selectedType = t; break; }
+      }
+
+      mediaRecorder = new MediaRecorder(stream, selectedType ? { mimeType: selectedType } : undefined);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunks.push(e.data);
+      };
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const mimeType = mediaRecorder.mimeType || 'audio/webm';
+        const blob = new Blob(audioChunks, { type: mimeType });
+        sendAndPlay(blob, mimeType);
+      };
+
+      mediaRecorder.start(200);
+      isRecording = true;
+      recordBtn.classList.add('recording');
+      recordBtn.textContent = '点击结束录音';
+      statusEl.textContent = '正在录音，请说话…';
+    }
+
+    function stopRecording() {
+      if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+      isRecording = false;
+      recordBtn.disabled = true;
+      statusEl.textContent = '正在识别和思考…';
+      mediaRecorder.stop();
+    }
+
+    async function sendAndPlay(blob, mimeType) {
+      const form = new FormData();
+      const ext = mimeType.includes('mp4') ? 'm4a' : (mimeType.includes('webm') ? 'webm' : 'bin');
+      form.append('audio', blob, `recording.${ext}`);
+      form.append('persona', 'tutor');
+
+      try {
+        const resp = await fetch('/voice/chat', { method: 'POST', body: form });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          throw new Error(`HTTP ${resp.status}: ${errText}`);
+        }
+        const audioBlob = await resp.blob();
+        transcriptEl.textContent = decodeBase64Unicode(resp.headers.get('X-Transcript') || '');
+        replyEl.textContent = decodeBase64Unicode(resp.headers.get('X-Reply') || '');
+        audioPlayer.src = URL.createObjectURL(audioBlob);
+        audioPlayer.play();
+        resultEl.style.display = 'block';
+        statusEl.textContent = '完成';
+      } catch (err) {
+        statusEl.textContent = '出错：' + err.message;
+        console.error(err);
+      } finally {
+        recordBtn.disabled = false;
+        recordBtn.classList.remove('recording');
+        recordBtn.textContent = '按住说话 / 点击开始';
+      }
+    }
+
+    recordBtn.addEventListener('click', () => {
+      if (isRecording) stopRecording(); else startRecording();
+    });
+  </script>
+</body>
+</html>
