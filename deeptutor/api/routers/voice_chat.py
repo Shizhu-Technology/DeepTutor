@@ -1,6 +1,6 @@
-"""Voice chat endpoint: audio in, audio out.
+"""Voice chat endpoints: audio in, audio/text out.
 
-    audio -> STT -> DeepTutor chat (with optional persona) -> TTS -> audio
+    audio -> STT -> DeepTutor chat -> {text, audio}
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 router = APIRouter()
 
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
-_MAX_REPLY_CHARS = 120
+_MAX_REPLY_CHARS = 140
 
 
 def _collect_text(events: list[dict[str, Any]]) -> str:
@@ -98,19 +98,8 @@ async def _run_chat_turn(
     return session, turn, reply_text
 
 
-@router.post("/chat", response_model=None)
-async def voice_chat(
-    request: Request,
-    audio: UploadFile = File(...),
-    persona: str | None = Form(default=None),
-    session_id: str | None = Form(default=None),
-    language: str | None = Form(default=None),
-    output: Literal["json", "audio"] = Query(default="json"),
-) -> JSONResponse | StreamingResponse:
-    t0 = time.monotonic()
+async def _read_and_validate_audio(audio: UploadFile) -> bytes:
     audio_bytes = await audio.read()
-    logger.info("voice_chat: received %d bytes", len(audio_bytes))
-
     if not audio_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty audio upload.")
     if len(audio_bytes) > _MAX_AUDIO_BYTES:
@@ -118,26 +107,34 @@ async def voice_chat(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Audio exceeds the 25 MB limit.",
         )
+    return audio_bytes
 
-    # 1. Speech-to-text
+
+async def _transcribe_for_chat(audio_bytes: bytes, audio: UploadFile, language: str | None) -> str:
     try:
-        transcript = await transcribe_audio(
+        return await transcribe_audio(
             audio_bytes,
             filename=audio.filename or "audio.webm",
             content_type=audio.content_type or "application/octet-stream",
             language=language,
         )
-        logger.info("voice_chat: STT done in %.2fs", time.monotonic() - t0)
     except VoiceProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    if not transcript or not transcript.strip():
+
+async def _chat_reply(
+    transcript: str,
+    *,
+    persona: str | None,
+    session_id: str | None,
+    language: str | None,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    if not transcript.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Speech could not be transcribed.",
         )
 
-    # 2. DeepTutor chat turn
     try:
         from deeptutor.services.workspace.context import current_workspace_id
         workspace_id = current_workspace_id()
@@ -145,7 +142,6 @@ async def voice_chat(
         workspace_id = None
 
     app = DeepTutorApp(workspace_id=workspace_id)
-    t1 = time.monotonic()
     try:
         session, turn, reply_text = await _run_chat_turn(
             app,
@@ -154,7 +150,6 @@ async def voice_chat(
             session_id=session_id,
             language=language,
         )
-        logger.info("voice_chat: chat done in %.2fs, reply_len=%d", time.monotonic() - t1, len(reply_text))
     except Exception as exc:
         logger.exception("DeepTutor turn failed")
         raise HTTPException(
@@ -168,13 +163,69 @@ async def voice_chat(
             detail="DeepTutor returned an empty response.",
         )
 
-    # Truncate to a single short sentence to keep TTS fast
     reply_text = reply_text.strip()
     if len(reply_text) > _MAX_REPLY_CHARS:
         reply_text = reply_text[:_MAX_REPLY_CHARS].rsplit("，", 1)[0] + "…"
-        logger.info("voice_chat: reply truncated to %d chars", len(reply_text))
+    return session, turn, reply_text
 
-    # 3. Text-to-speech
+
+@router.post("/chat/text")
+async def voice_chat_text(
+    request: Request,
+    audio: UploadFile = File(...),
+    persona: str | None = Form(default=None),
+    session_id: str | None = Form(default=None),
+    language: str | None = Form(default=None),
+) -> JSONResponse:
+    """Audio -> STT -> DeepTutor chat. Returns text only (fast)."""
+    t0 = time.monotonic()
+    audio_bytes = await _read_and_validate_audio(audio)
+    transcript = await _transcribe_for_chat(audio_bytes, audio, language)
+    logger.info("voice_chat_text: STT done in %.2fs, transcript=%r", time.monotonic() - t0, transcript[:60])
+
+    t1 = time.monotonic()
+    session, turn, reply_text = await _chat_reply(
+        transcript,
+        persona=persona,
+        session_id=session_id,
+        language=language,
+    )
+    logger.info("voice_chat_text: chat done in %.2fs", time.monotonic() - t1)
+
+    return JSONResponse(
+        content={
+            "session_id": str(session.get("id", "")),
+            "turn_id": str(turn.get("id", "")),
+            "transcript": transcript.strip(),
+            "reply": reply_text,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/chat", response_model=None)
+async def voice_chat(
+    request: Request,
+    audio: UploadFile = File(...),
+    persona: str | None = Form(default=None),
+    session_id: str | None = Form(default=None),
+    language: str | None = Form(default=None),
+    output: Literal["json", "audio"] = Query(default="json"),
+) -> JSONResponse | StreamingResponse:
+    """Audio -> STT -> chat -> TTS. Returns JSON (with audio base64) or raw audio."""
+    t0 = time.monotonic()
+    audio_bytes = await _read_and_validate_audio(audio)
+    transcript = await _transcribe_for_chat(audio_bytes, audio, language)
+    logger.info("voice_chat: STT done in %.2fs", time.monotonic() - t0)
+
+    session, turn, reply_text = await _chat_reply(
+        transcript,
+        persona=persona,
+        session_id=session_id,
+        language=language,
+    )
+    logger.info("voice_chat: chat done, reply_len=%d", len(reply_text))
+
     t2 = time.monotonic()
     try:
         audio_out, content_type = await synthesize_speech(reply_text)

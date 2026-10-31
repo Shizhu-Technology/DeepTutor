@@ -45,20 +45,22 @@ class VoiceUIHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
         return super().do_GET()
 
-    def do_POST(self):
-        if self.path != "/voice/chat":
-            self.send_error(404)
-            return
-
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length) if length else b""
-
-        target = f"{BACKEND_URL}/api/voice/chat?output=audio"
+    def _forward(
+        self,
+        target_path: str,
+        body: bytes,
+        content_type: str,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
+        target = f"{BACKEND_URL}{target_path}"
         headers = {
-            "Content-Type": self.headers.get("Content-Type", "application/octet-stream"),
+            "Content-Type": content_type,
             "Content-Length": str(len(body)),
             "Accept": "*/*",
         }
+        if extra_headers:
+            headers.update(extra_headers)
         token = os.environ.get("DEEPTUTOR_TOKEN")
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -67,7 +69,7 @@ class VoiceUIHandler(SimpleHTTPRequestHandler):
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:
                 self.send_response(resp.status)
-                for h in ("Content-Type", "X-Session-Id", "X-Turn-Id", "X-Transcript", "X-Reply"):
+                for h in ["Content-Type", "X-Session-Id", "X-Turn-Id", "X-Transcript", "X-Reply"]:
                     v = resp.headers.get(h)
                     if v:
                         self.send_header(h, v)
@@ -82,6 +84,20 @@ class VoiceUIHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
             self.wfile.write(exc.read())
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length else b""
+        content_type = self.headers.get("Content-Type", "application/octet-stream")
+
+        if self.path == "/voice/chat" or self.path == "/voice/chat/text":
+            self._forward(self.path.replace("/voice", "/api/voice", 1), body, content_type)
+            return
+        if self.path == "/voice/tts":
+            self._forward("/api/voice/tts", body, content_type)
+            return
+
+        self.send_error(404)
 
 
 def main() -> None:

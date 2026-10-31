@@ -124,28 +124,19 @@
     let audioChunks = [];
     let isRecording = false;
     let sessionId = '';
-    let statusTimer = null;
-    let startTime = 0;
-
-    function decodeBase64Unicode(str) {
-      try { return decodeURIComponent(escape(atob(str))); } catch (e) { return atob(str); }
-    }
 
     function appendMessage(role, html) {
       const wrapper = document.createElement('div');
       wrapper.className = 'msg ' + role;
-      const label = role === 'user' ? '我' : 'AI 助教';
+      const label = role === 'user' ? '我（语音转文字）' : 'AI 助教';
       wrapper.innerHTML = '<div class="msg-label">' + label + '</div>' + html;
       chatEl.appendChild(wrapper);
       chatEl.scrollTop = chatEl.scrollHeight;
       return wrapper;
     }
 
-    function updateWorkingStatus() {
-      const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      if (elapsed < 4) statusEl.textContent = `正在识别语音…(${elapsed}s)`;
-      else if (elapsed < 10) statusEl.textContent = `正在思考回复…(${elapsed}s)`;
-      else statusEl.textContent = `正在合成语音…(${elapsed}s)`;
+    function escapeHtml(text) {
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
     }
 
     async function startRecording() {
@@ -159,7 +150,7 @@
       mediaRecorder.onstop = () => {
         stream.getTracks().forEach(t => t.stop());
         const mimeType = mediaRecorder.mimeType || 'audio/webm';
-        sendAndPlay(new Blob(audioChunks, { type: mimeType }), mimeType);
+        sendTextThenAudio(new Blob(audioChunks, { type: mimeType }), mimeType);
       };
       mediaRecorder.start(200);
       isRecording = true;
@@ -172,49 +163,48 @@
       if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
       isRecording = false;
       recordBtn.disabled = true;
-      startTime = Date.now();
-      statusTimer = setInterval(updateWorkingStatus, 1000);
-      updateWorkingStatus();
       appendMessage('user', '<i>🎤 语音消息</i>');
+      statusEl.textContent = '正在识别语音…';
       mediaRecorder.stop();
     }
 
-    async function sendAndPlay(blob, mimeType) {
+    async function sendTextThenAudio(blob, mimeType) {
       const form = new FormData();
       const ext = mimeType.includes('mp4') ? 'm4a' : (mimeType.includes('webm') ? 'webm' : 'bin');
       form.append('audio', blob, `recording.${ext}`);
       form.append('persona', 'tutor');
       if (sessionId) form.append('session_id', sessionId);
 
-      const abortCtl = new AbortController();
-      const TO = setTimeout(() => abortCtl.abort(), 40000);
-
       try {
-        const resp = await fetch('/voice/chat', { method: 'POST', body: form, signal: abortCtl.signal });
-        clearTimeout(TO);
-        if (!resp.ok) { throw new Error(`HTTP ${resp.status}: ${await resp.text()}`); }
-        const audioBlob = await resp.blob();
-        const transcript = decodeBase64Unicode(resp.headers.get('X-Transcript') || '');
-        const reply = decodeBase64Unicode(resp.headers.get('X-Reply') || '');
-        sessionId = resp.headers.get('X-Session-Id') || sessionId;
+        // 1. STT + chat text
+        const resp = await fetch('/voice/chat/text', { method: 'POST', body: form });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+        const data = await resp.json();
+        sessionId = data.session_id || sessionId;
 
-        chatEl.lastChild.outerHTML = ''; // remove placeholder user bubble
-        appendMessage('user', transcript.replace(/\n/g, '<br>'));
-        appendMessage('assistant', reply.replace(/\n/g, '<br>'));
+        chatEl.lastElementChild.outerHTML = '';
+        appendMessage('user', escapeHtml(data.transcript));
+        appendMessage('assistant', escapeHtml(data.reply));
+        statusEl.textContent = '回复已显示，正在合成语音…';
 
+        // 2. 单独合成语音并播放
+        const ttsResp = await fetch('/voice/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: data.reply }),
+        });
+        if (!ttsResp.ok) throw new Error(`TTS HTTP ${ttsResp.status}: ${await ttsResp.text()}`);
+        const audioBlob = await ttsResp.blob();
         audioPlayer.src = URL.createObjectURL(audioBlob);
         resultEl.style.display = 'block';
         statusEl.textContent = '完成';
       } catch (err) {
-        clearTimeout(TO);
-        if (err.name === 'AbortError') statusEl.textContent = '处理超时（40s），请缩短问题或稍后再试';
-        else statusEl.textContent = '出错：' + err.message;
+        statusEl.textContent = '出错：' + err.message;
         console.error(err);
       } finally {
         recordBtn.disabled = false;
         recordBtn.classList.remove('recording');
         recordBtn.textContent = '按住说话 / 点击开始';
-        if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
       }
     }
 
