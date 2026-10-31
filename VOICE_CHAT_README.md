@@ -80,6 +80,17 @@ python3 run.py
 
 详见 `voice_chat_ui/README.md`。
 
+## 开发后重启后端
+
+修改代码或 `server.json` 后，需要重新安装并重启 `deeptutor serve`：
+
+```bash
+cd ~/DeepTutor
+pip install -e . --no-deps
+pkill -f "deeptutor serve --port 8001"
+deeptutor serve --port 8001
+```
+
 ## 认证
 
 接口默认需要 DeepTutor 登录 session（`auth: learning`）。外部匿名调用请：
