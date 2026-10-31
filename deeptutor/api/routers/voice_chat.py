@@ -20,7 +20,6 @@ logger.setLevel(logging.INFO)
 router = APIRouter()
 
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
-_MAX_REPLY_CHARS = 140
 
 
 def _collect_text(events: list[dict[str, Any]]) -> str:
@@ -136,9 +135,6 @@ async def _chat_reply(
             detail="DeepTutor returned an empty response.",
         )
 
-    reply_text = reply_text.strip()
-    if len(reply_text) > _MAX_REPLY_CHARS:
-        reply_text = reply_text[:_MAX_REPLY_CHARS].rsplit("，", 1)[0] + "…"
     return session, turn, reply_text
 
 
